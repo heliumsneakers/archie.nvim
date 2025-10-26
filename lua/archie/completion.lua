@@ -4,15 +4,20 @@ local Job = require("plenary.job")
 
 local M = {}
 
--- ghost namespace
+-- ghost namespace and state
 local ghost_ns = vim.api.nvim_create_namespace("archie_ghost")
 local ghost_enabled = false
+local debounce_timer = nil
+local debounce_delay = 250  -- ms delay after typing stops
+local current_job = nil
 
--- add this setup function so init.lua can call it safely
+---------------------------------------------------------------------
+-- SETUP
+---------------------------------------------------------------------
 function M.setup(opts)
-  -- nothing special for now, but we might add config later
-  if opts and opts.autocomplete_delay then
-    M.delay = opts.autocomplete_delay
+  opts = opts or {}
+  if opts.autocomplete_delay then
+    debounce_delay = opts.autocomplete_delay
   end
 end
 
@@ -20,12 +25,13 @@ function M.is_enabled()
   return ghost_enabled
 end
 
--- clear ghost text
+---------------------------------------------------------------------
+-- HELPERS
+---------------------------------------------------------------------
 local function clear_ghost()
   vim.api.nvim_buf_clear_namespace(0, ghost_ns, 0, -1)
 end
 
--- render ghost text at cursor line
 local function show_ghost(text)
   if not ghost_enabled or not text or text == "" then return end
   local buf = vim.api.nvim_get_current_buf()
@@ -42,14 +48,21 @@ local function show_ghost(text)
   })
 end
 
--- async model query
-function M.suggest()
+---------------------------------------------------------------------
+-- MODEL REQUEST
+---------------------------------------------------------------------
+local function request_completion()
   if not ghost_enabled then return end
 
   local ctx = lsp.get_semantic_context()
   local prompt = table.concat(ctx.code, "\n") .. "\n# Continue code:\n"
 
-  Job:new({
+  -- cancel any ongoing job
+  if current_job and not current_job.is_shutdown then
+    pcall(current_job.shutdown, current_job)
+  end
+
+  current_job = Job:new({
     command = "curl",
     args = {
       "-s",
@@ -60,7 +73,7 @@ function M.suggest()
         max_tokens = 64,
         temperature = 0.2,
       }),
-      "http://127.0.0.1:8080/completion",
+      api.endpoint,
     },
     on_exit = function(j, code)
       if code ~= 0 then
@@ -69,7 +82,6 @@ function M.suggest()
         end)
         return
       end
-
       local output = table.concat(j:result(), "\n")
       local ok, res = pcall(vim.fn.json_decode, output)
       if not ok or not res then return end
@@ -83,7 +95,30 @@ function M.suggest()
         show_ghost(text)
       end)
     end,
-  }):start()
+  })
+
+  current_job:start()
+end
+
+---------------------------------------------------------------------
+-- AUTOCOMPLETE HOOKS
+---------------------------------------------------------------------
+-- Triggered after typing stops for debounce_delay ms
+local function debounced_suggest()
+  if debounce_timer then
+    debounce_timer:stop()
+    debounce_timer:close()
+  end
+
+  debounce_timer = vim.defer_fn(function()
+    request_completion()
+  end, debounce_delay)
+end
+
+-- Public API to trigger manually
+function M.suggest()
+  if not ghost_enabled then return end
+  request_completion()
 end
 
 function M.toggle_ghost()
@@ -91,9 +126,19 @@ function M.toggle_ghost()
   if not ghost_enabled then
     clear_ghost()
     vim.notify("Archie autocomplete disabled", vim.log.levels.INFO)
+    -- remove autocmds
+    pcall(vim.api.nvim_del_autocmd, M._insert_autocmd)
   else
     vim.notify("Archie autocomplete enabled", vim.log.levels.INFO)
-    M.suggest()
+
+    -- set up autocmds to track typing
+    local group = vim.api.nvim_create_augroup("ArchieAutoComplete", { clear = true })
+    M._insert_autocmd = vim.api.nvim_create_autocmd("InsertCharPre", {
+      group = group,
+      callback = function()
+        debounced_suggest()
+      end,
+    })
   end
 end
 
