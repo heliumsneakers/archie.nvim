@@ -7,13 +7,17 @@ local ghost_enabled = false
 
 function M.setup(_) end
 
+function M.is_enabled()
+  return ghost_enabled
+end
+
 function M.toggle_ghost()
   ghost_enabled = not ghost_enabled
   if not ghost_enabled then
     vim.api.nvim_buf_clear_namespace(0, ghost_ns, 0, -1)
-    vim.notify("Qwen ghost disabled", vim.log.levels.INFO)
+    vim.notify("Archie autocomplete disabled", vim.log.levels.INFO)
   else
-    vim.notify("Qwen ghost enabled", vim.log.levels.INFO)
+    vim.notify("Archie autocomplete enabled", vim.log.levels.INFO)
     M.suggest()
   end
 end
