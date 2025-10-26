@@ -107,11 +107,17 @@ local function request_completion()
         return
       end
 
-      -- try decode
-      local ok, res = pcall(vim.fn.json_decode, stdout)
+      -- sanitize model output to valid JSON
+      local sanitized = stdout:gsub("\r", ""):gsub("\n(%s*[^%{%}%[%],\"])", "\\n%1")
+      -- attempt to close truncated JSON (some servers cut off final brace)
+      if not sanitized:match("}%s*$") then
+        sanitized = sanitized .. "}"
+      end
+
+      local ok, res = pcall(vim.fn.json_decode, sanitized)
       if not ok or type(res) ~= "table" then
         vim.schedule(function()
-          vim.notify("Archie: invalid JSON response:\n" .. stdout, vim.log.levels.ERROR)
+          vim.notify("Archie: invalid JSON response:\n" .. sanitized, vim.log.levels.ERROR)
         end)
         return
       end
