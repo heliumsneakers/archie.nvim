@@ -4,12 +4,15 @@ local Job = require("plenary.job")
 
 local M = {}
 
--- ghost namespace and state
+---------------------------------------------------------------------
+-- GLOBAL STATE / HIGHLIGHT
+---------------------------------------------------------------------
 local ghost_ns = vim.api.nvim_create_namespace("archie_ghost")
 local ghost_enabled = false
 local debounce_timer = nil
-local debounce_delay = 250  -- ms delay after typing stops
+local debounce_delay = 250 -- ms delay after typing stops
 local current_job = nil
+
 vim.api.nvim_set_hl(0, "ArchieGhostText", { fg = "#666666", italic = true })
 
 ---------------------------------------------------------------------
@@ -44,7 +47,7 @@ local function show_ghost(text)
   clear_ghost()
   vim.api.nvim_buf_set_extmark(buf, ghost_ns, line, -1, {
     virt_text = { { preview, "ArchieGhostText" } },
-    virt_text_pos = "inline",  -- overlays ghost text at cursor
+    virt_text_pos = "inline", -- overlay ghost text
     hl_mode = "combine",
   })
 end
@@ -56,9 +59,11 @@ local function request_completion()
   if not ghost_enabled then return end
 
   local ctx = lsp.get_semantic_context()
+  if not ctx or not ctx.code then return end
+
   local prompt = table.concat(ctx.code, "\n") .. "\n# Continue code:\n"
 
-  -- cancel any ongoing job
+  -- cancel any previous job
   if current_job and not current_job.is_shutdown then
     pcall(current_job.shutdown, current_job)
   end
@@ -66,32 +71,53 @@ local function request_completion()
   current_job = Job:new({
     command = "curl",
     args = {
-      "-s",
+      "-sS",
       "-X", "POST",
       "-H", "Content-Type: application/json",
+      "--no-buffer",
       "-d", vim.fn.json_encode({
         prompt = prompt,
-        max_tokens = 64,
+        n_predict = 64,
         temperature = 0.2,
+        stream = false,
       }),
       api.endpoint,
     },
     on_exit = function(j, code)
+      local stdout = table.concat(j:result(), "\n")
+      local stderr = table.concat(j:stderr_result(), "\n")
+
       if code ~= 0 then
         vim.schedule(function()
-          vim.notify("Archie model request failed", vim.log.levels.ERROR)
+          vim.notify(
+            ("Archie model request failed (exit %d)\nSTDERR: %s"):format(code, stderr),
+            vim.log.levels.ERROR
+          )
         end)
         return
       end
-      local output = table.concat(j:result(), "\n")
-      local ok, res = pcall(vim.fn.json_decode, output)
-      if not ok or not res then return end
 
+      -- try decode
+      local ok, res = pcall(vim.fn.json_decode, stdout)
+      if not ok or type(res) ~= "table" then
+        vim.schedule(function()
+          vim.notify("Archie: invalid JSON response:\n" .. stdout, vim.log.levels.ERROR)
+        end)
+        return
+      end
+
+      -- Extract text from known schema (llama.cpp / Qwen / OpenAI)
       local text = res.content
-      or res.text
-      or (res.choices and res.choices[1]
-      and (res.choices[1].text or res.choices[1].content))
-      if not text or text == "" then return end
+        or res.text
+        or (res.choices and res.choices[1]
+          and (res.choices[1].text
+            or (res.choices[1].message and res.choices[1].message.content)
+            or res.choices[1].content))
+        or res.response
+
+      if not text or text == "" then
+        return
+      end
 
       vim.schedule(function()
         show_ghost(text)
@@ -105,7 +131,6 @@ end
 ---------------------------------------------------------------------
 -- AUTOCOMPLETE HOOKS
 ---------------------------------------------------------------------
--- Triggered after typing stops for debounce_delay ms
 local function debounced_suggest()
   if debounce_timer and not debounce_timer:is_closing() then
     debounce_timer:stop()
@@ -120,7 +145,7 @@ local function debounced_suggest()
   end)
 end
 
--- Public API to trigger manually
+-- Public manual trigger
 function M.suggest()
   if not ghost_enabled then return end
   request_completion()
@@ -130,13 +155,15 @@ function M.toggle_ghost()
   ghost_enabled = not ghost_enabled
   if not ghost_enabled then
     clear_ghost()
+    if debounce_timer and not debounce_timer:is_closing() then
+      debounce_timer:stop()
+      debounce_timer:close()
+      debounce_timer = nil
+    end
     vim.notify("Archie autocomplete disabled", vim.log.levels.INFO)
-    -- remove autocmds
     pcall(vim.api.nvim_del_autocmd, M._insert_autocmd)
   else
     vim.notify("Archie autocomplete enabled", vim.log.levels.INFO)
-
-    -- set up autocmds to track typing
     local group = vim.api.nvim_create_augroup("ArchieAutoComplete", { clear = true })
     M._insert_autocmd = vim.api.nvim_create_autocmd("InsertCharPre", {
       group = group,
@@ -147,11 +174,16 @@ function M.toggle_ghost()
   end
 end
 
+---------------------------------------------------------------------
+-- ACCEPT GHOST TEXT
+---------------------------------------------------------------------
 function M.accept_ghost()
   local buf = vim.api.nvim_get_current_buf()
   local line = vim.api.nvim_win_get_cursor(0)[1] - 1
-  local extmarks = vim.api.nvim_buf_get_extmarks(buf, ghost_ns, {line, 0}, {line, -1}, { details = true })
+  local extmarks =
+    vim.api.nvim_buf_get_extmarks(buf, ghost_ns, { line, 0 }, { line, -1 }, { details = true })
   if #extmarks == 0 then return end
+
   local details = extmarks[1][4]
   local text = details.virt_text and details.virt_text[1][1]
   if not text or text == "" then return end
@@ -164,4 +196,5 @@ vim.keymap.set("i", "<Tab>", function()
   require("archie.completion").accept_ghost()
 end, { desc = "Accept Archie ghost text" })
 
+---------------------------------------------------------------------
 return M
