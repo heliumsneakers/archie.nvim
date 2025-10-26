@@ -87,10 +87,20 @@ local function request_completion()
       local stdout = table.concat(j:result(), "\n")
       local stderr = table.concat(j:stderr_result(), "\n")
 
-      if code ~= 0 then
+      -- if curl fails or no exit code provided
+      if not code or code ~= 0 then
+        local exit_code = code or -1
+        local stderr = table.concat(j:stderr_result(), "\n")
+        local stdout = table.concat(j:result(), "\n")
+
         vim.schedule(function()
           vim.notify(
-            ("Archie model request failed (exit %d)\nSTDERR: %s"):format(code, stderr),
+            string.format(
+              "Archie model request failed (exit %d)\nSTDOUT: %s\nSTDERR: %s",
+              exit_code,
+              stdout ~= "" and stdout or "<empty>",
+              stderr ~= "" and stderr or "<empty>"
+            ),
             vim.log.levels.ERROR
           )
         end)
@@ -108,12 +118,12 @@ local function request_completion()
 
       -- Extract text from known schema (llama.cpp / Qwen / OpenAI)
       local text = res.content
-        or res.text
-        or (res.choices and res.choices[1]
-          and (res.choices[1].text
-            or (res.choices[1].message and res.choices[1].message.content)
-            or res.choices[1].content))
-        or res.response
+      or res.text
+      or (res.choices and res.choices[1]
+      and (res.choices[1].text
+      or (res.choices[1].message and res.choices[1].message.content)
+      or res.choices[1].content))
+      or res.response
 
       if not text or text == "" then
         return
@@ -181,7 +191,7 @@ function M.accept_ghost()
   local buf = vim.api.nvim_get_current_buf()
   local line = vim.api.nvim_win_get_cursor(0)[1] - 1
   local extmarks =
-    vim.api.nvim_buf_get_extmarks(buf, ghost_ns, { line, 0 }, { line, -1 }, { details = true })
+  vim.api.nvim_buf_get_extmarks(buf, ghost_ns, { line, 0 }, { line, -1 }, { details = true })
   if #extmarks == 0 then return end
 
   local details = extmarks[1][4]
