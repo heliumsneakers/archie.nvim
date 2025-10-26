@@ -37,7 +37,9 @@ local function clear_ghost()
 end
 
 local function show_ghost(text)
-  if not ghost_enabled or not text or text == "" then return end
+  if not ghost_enabled or not text or text == "" then
+    return
+  end
   local buf = vim.api.nvim_get_current_buf()
   local line = vim.api.nvim_win_get_cursor(0)[1] - 1
 
@@ -47,19 +49,44 @@ local function show_ghost(text)
   clear_ghost()
   vim.api.nvim_buf_set_extmark(buf, ghost_ns, line, -1, {
     virt_text = { { preview, "ArchieGhostText" } },
-    virt_text_pos = "inline", -- overlay ghost text
+    virt_text_pos = "inline", -- overlays ghost text after cursor
     hl_mode = "combine",
   })
+end
+
+---------------------------------------------------------------------
+-- ROBUST JSON SANITIZER
+---------------------------------------------------------------------
+local function sanitize_json(str)
+  -- Normalize CRLF to LF
+  str = str:gsub("\r\n", "\n")
+
+  -- Escape bare newlines inside quoted strings
+  str = str:gsub('"(.-)"', function(segment)
+    local fixed = segment:gsub("\n", "\\n")
+    return '"' .. fixed .. '"'
+  end)
+
+  -- Ensure final brace
+  if not str:match("}%s*$") then
+    str = str .. "}"
+  end
+
+  return str
 end
 
 ---------------------------------------------------------------------
 -- MODEL REQUEST
 ---------------------------------------------------------------------
 local function request_completion()
-  if not ghost_enabled then return end
+  if not ghost_enabled then
+    return
+  end
 
   local ctx = lsp.get_semantic_context()
-  if not ctx or not ctx.code then return end
+  if not ctx or not ctx.code then
+    return
+  end
 
   local prompt = table.concat(ctx.code, "\n") .. "\n# Continue code:\n"
 
@@ -74,7 +101,6 @@ local function request_completion()
       "-sS",
       "-X", "POST",
       "-H", "Content-Type: application/json",
-      "--no-buffer",
       "-d", vim.fn.json_encode({
         prompt = prompt,
         n_predict = 64,
@@ -87,12 +113,9 @@ local function request_completion()
       local stdout = table.concat(j:result(), "\n")
       local stderr = table.concat(j:stderr_result(), "\n")
 
-      -- if curl fails or no exit code provided
+      -- Handle non-zero or nil exit code
       if not code or code ~= 0 then
         local exit_code = code or -1
-        local stderr = table.concat(j:stderr_result(), "\n")
-        local stdout = table.concat(j:result(), "\n")
-
         vim.schedule(function()
           vim.notify(
             string.format(
@@ -107,13 +130,8 @@ local function request_completion()
         return
       end
 
-      -- sanitize model output to valid JSON
-      local sanitized = stdout:gsub("\r", ""):gsub("\n(%s*[^%{%}%[%],\"])", "\\n%1")
-      -- attempt to close truncated JSON (some servers cut off final brace)
-      if not sanitized:match("}%s*$") then
-        sanitized = sanitized .. "}"
-      end
-
+      -- Try to sanitize malformed JSON (Qwen/llama.cpp often break lines mid-string)
+      local sanitized = sanitize_json(stdout)
       local ok, res = pcall(vim.fn.json_decode, sanitized)
       if not ok or type(res) ~= "table" then
         vim.schedule(function()
@@ -122,14 +140,14 @@ local function request_completion()
         return
       end
 
-      -- Extract text from known schema (llama.cpp / Qwen / OpenAI)
+      -- Extract text from multiple model schemas
       local text = res.content
-      or res.text
-      or (res.choices and res.choices[1]
-      and (res.choices[1].text
-      or (res.choices[1].message and res.choices[1].message.content)
-      or res.choices[1].content))
-      or res.response
+        or res.text
+        or (res.choices and res.choices[1]
+          and (res.choices[1].text
+            or (res.choices[1].message and res.choices[1].message.content)
+            or res.choices[1].content))
+        or res.response
 
       if not text or text == "" then
         return
@@ -163,7 +181,9 @@ end
 
 -- Public manual trigger
 function M.suggest()
-  if not ghost_enabled then return end
+  if not ghost_enabled then
+    return
+  end
   request_completion()
 end
 
@@ -197,12 +217,16 @@ function M.accept_ghost()
   local buf = vim.api.nvim_get_current_buf()
   local line = vim.api.nvim_win_get_cursor(0)[1] - 1
   local extmarks =
-  vim.api.nvim_buf_get_extmarks(buf, ghost_ns, { line, 0 }, { line, -1 }, { details = true })
-  if #extmarks == 0 then return end
+      vim.api.nvim_buf_get_extmarks(buf, ghost_ns, { line, 0 }, { line, -1 }, { details = true })
+  if #extmarks == 0 then
+    return
+  end
 
   local details = extmarks[1][4]
   local text = details.virt_text and details.virt_text[1][1]
-  if not text or text == "" then return end
+  if not text or text == "" then
+    return
+  end
 
   vim.api.nvim_buf_set_text(buf, line, -1, line, -1, { text })
   clear_ghost()
