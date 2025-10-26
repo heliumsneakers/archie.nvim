@@ -8,6 +8,14 @@ local M = {}
 local ghost_ns = vim.api.nvim_create_namespace("archie_ghost")
 local ghost_enabled = false
 
+-- add this setup function so init.lua can call it safely
+function M.setup(opts)
+  -- nothing special for now, but we might add config later
+  if opts and opts.autocomplete_delay then
+    M.delay = opts.autocomplete_delay
+  end
+end
+
 function M.is_enabled()
   return ghost_enabled
 end
@@ -23,12 +31,10 @@ local function show_ghost(text)
   local buf = vim.api.nvim_get_current_buf()
   local line = vim.api.nvim_win_get_cursor(0)[1] - 1
 
-  -- trim leading newlines/spaces
   text = text:gsub("^%s+", "")
   local preview = text:match("^[^\n]+") or text
 
   clear_ghost()
-
   vim.api.nvim_buf_set_extmark(buf, ghost_ns, line, -1, {
     virt_text = { { preview, "Comment" } },
     virt_text_pos = "eol",
@@ -68,8 +74,9 @@ function M.suggest()
       local ok, res = pcall(vim.fn.json_decode, output)
       if not ok or not res then return end
 
-      -- handle both llama.cpp and OpenAI-like responses
-      local text = res.text or (res.choices and res.choices[1] and (res.choices[1].text or res.choices[1].content))
+      local text = res.text
+        or (res.choices and res.choices[1]
+          and (res.choices[1].text or res.choices[1].content))
       if not text or text == "" then return end
 
       vim.schedule(function()
