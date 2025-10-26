@@ -40,34 +40,37 @@ local function show_ghost(text)
   if not ghost_enabled or not text or text == "" then
     return
   end
+
   local buf = vim.api.nvim_get_current_buf()
   local line = vim.api.nvim_win_get_cursor(0)[1] - 1
-
   text = text:gsub("^%s+", "")
   local preview = text:match("^[^\n]+") or text
 
   clear_ghost()
   vim.api.nvim_buf_set_extmark(buf, ghost_ns, line, -1, {
     virt_text = { { preview, "ArchieGhostText" } },
-    virt_text_pos = "inline", -- overlays ghost text after cursor
+    virt_text_pos = "inline",
     hl_mode = "combine",
   })
 end
 
 ---------------------------------------------------------------------
--- ROBUST JSON SANITIZER
+-- JSON SANITIZER
 ---------------------------------------------------------------------
 local function sanitize_json(str)
-  -- Normalize CRLF to LF
+  if not str or str == "" then
+    return "{}"
+  end
+
   str = str:gsub("\r\n", "\n")
 
-  -- Escape bare newlines inside quoted strings
+  -- Escape embedded newlines inside quotes
   str = str:gsub('"(.-)"', function(segment)
     local fixed = segment:gsub("\n", "\\n")
     return '"' .. fixed .. '"'
   end)
 
-  -- Ensure final brace
+  -- Close brace if missing
   if not str:match("}%s*$") then
     str = str .. "}"
   end
@@ -90,14 +93,16 @@ local function request_completion()
 
   local prompt = table.concat(ctx.code, "\n") .. "\n# Continue code:\n"
 
-  -- cancel any previous job
+  -- Cancel old job
   if current_job and not current_job.is_shutdown then
     pcall(current_job.shutdown, current_job)
   end
 
+  -- Non-stream, single-shot request
   current_job = Job:new({
     command = "curl",
     args = {
+      "--no-buffer",
       "-sS",
       "-X", "POST",
       "-H", "Content-Type: application/json",
@@ -113,7 +118,7 @@ local function request_completion()
       local stdout = table.concat(j:result(), "\n")
       local stderr = table.concat(j:stderr_result(), "\n")
 
-      -- Handle non-zero or nil exit code
+      -- Fail-fast on curl failure
       if not code or code ~= 0 then
         local exit_code = code or -1
         vim.schedule(function()
@@ -130,7 +135,7 @@ local function request_completion()
         return
       end
 
-      -- Try to sanitize malformed JSON (Qwen/llama.cpp often break lines mid-string)
+      -- Clean malformed JSON
       local sanitized = sanitize_json(stdout)
       local ok, res = pcall(vim.fn.json_decode, sanitized)
       if not ok or type(res) ~= "table" then
@@ -140,7 +145,7 @@ local function request_completion()
         return
       end
 
-      -- Extract text from multiple model schemas
+      -- Extract text from any supported format
       local text = res.content
         or res.text
         or (res.choices and res.choices[1]
@@ -173,13 +178,10 @@ local function debounced_suggest()
 
   debounce_timer = vim.loop.new_timer()
   debounce_timer:start(debounce_delay, 0, function()
-    vim.schedule(function()
-      request_completion()
-    end)
+    vim.schedule(request_completion)
   end)
 end
 
--- Public manual trigger
 function M.suggest()
   if not ghost_enabled then
     return
