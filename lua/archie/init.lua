@@ -1,7 +1,7 @@
+-- lua/archie/init.lua
 local M = {}
 
-local menu_win = nil
-local menu_buf = nil
+local menu_win, menu_buf
 
 local function close_menu()
   if menu_win and vim.api.nvim_win_is_valid(menu_win) then
@@ -12,10 +12,7 @@ end
 
 local function render_menu()
   if not menu_buf then return end
-
-  -- temporarily allow editing the buffer
   vim.bo[menu_buf].modifiable = true
-
   local ghost_on = require("archie.completion").is_enabled()
   local lines = {
     "  ⚙  Archie Menu",
@@ -25,20 +22,15 @@ local function render_menu()
     "",
     "  q / Esc  →  Close menu",
   }
-
   vim.api.nvim_buf_set_lines(menu_buf, 0, -1, false, lines)
-
-  -- now lock the buffer again
   vim.bo[menu_buf].modifiable = false
 end
 
 function M.open_menu()
-  -- toggle if already open
   if menu_win and vim.api.nvim_win_is_valid(menu_win) then
     close_menu()
     return
   end
-
   menu_buf = vim.api.nvim_create_buf(false, true)
   local width, height = 36, 7
   local row = math.floor((vim.o.lines - height) / 2)
@@ -57,9 +49,7 @@ function M.open_menu()
   })
 
   vim.bo[menu_buf].bufhidden = "wipe"
-  vim.bo[menu_buf].modifiable = true
 
-  -- Keymaps inside menu
   vim.keymap.set("n", "q", close_menu, { buffer = menu_buf, nowait = true })
   vim.keymap.set("n", "<Esc>", close_menu, { buffer = menu_buf, nowait = true })
 
@@ -82,7 +72,6 @@ function M.setup(opts)
   require("archie.completion").setup(opts)
   require("archie.ui").setup(opts)
 
-  -- Normal-mode keymap: <Space>| (Space + Shift + \)
   vim.keymap.set("n", "<Space>|", function()
     M.open_menu()
   end, { desc = "Open Archie menu" })
