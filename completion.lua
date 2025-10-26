@@ -1,5 +1,5 @@
-local api = require("qwen_coder.api")
-local lsp = require("qwen_coder.lsp_bridge")
+local api = require("archie.api")
+local lsp = require("archie.lsp_bridge")
 
 local M = {}
 local ghost_ns = vim.api.nvim_create_namespace("qwen_ghost")
