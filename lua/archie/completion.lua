@@ -55,27 +55,43 @@ local function show_ghost(text)
 end
 
 ---------------------------------------------------------------------
--- JSON SANITIZER
+-- STRONG JSON SANITIZER
 ---------------------------------------------------------------------
-local function sanitize_json(str)
-  if not str or str == "" then
+local function sanitize_json(raw)
+  if not raw or raw == "" then
     return "{}"
   end
 
-  str = str:gsub("\r\n", "\n")
-
-  -- Escape embedded newlines inside quotes
-  str = str:gsub('"(.-)"', function(segment)
-    local fixed = segment:gsub("\n", "\\n")
-    return '"' .. fixed .. '"'
-  end)
-
-  -- Close brace if missing
-  if not str:match("}%s*$") then
-    str = str .. "}"
+  -- Keep only the last full JSON block
+  local last_obj = raw:match("(%b{})%s*$")
+  if last_obj then
+    raw = last_obj
   end
 
-  return str
+  -- Normalize CRLF → LF
+  raw = raw:gsub("\r\n", "\n")
+
+  -- Escape literal newlines inside quoted strings
+  local fixed = {}
+  local in_string = false
+  for c in raw:gmatch(".") do
+    if c == '"' then
+      table.insert(fixed, c)
+      in_string = not in_string
+    elseif in_string and c == "\n" then
+      table.insert(fixed, "\\n")
+    else
+      table.insert(fixed, c)
+    end
+  end
+  raw = table.concat(fixed)
+
+  -- Ensure closing brace
+  if not raw:match("}%s*$") then
+    raw = raw .. "}"
+  end
+
+  return raw
 end
 
 ---------------------------------------------------------------------
@@ -93,12 +109,11 @@ local function request_completion()
 
   local prompt = table.concat(ctx.code, "\n") .. "\n# Continue code:\n"
 
-  -- Cancel old job
+  -- Cancel previous job if running
   if current_job and not current_job.is_shutdown then
     pcall(current_job.shutdown, current_job)
   end
 
-  -- Non-stream, single-shot request
   current_job = Job:new({
     command = "curl",
     args = {
@@ -118,7 +133,6 @@ local function request_completion()
       local stdout = table.concat(j:result(), "\n")
       local stderr = table.concat(j:stderr_result(), "\n")
 
-      -- Fail-fast on curl failure
       if not code or code ~= 0 then
         local exit_code = code or -1
         vim.schedule(function()
@@ -135,9 +149,14 @@ local function request_completion()
         return
       end
 
-      -- Clean malformed JSON
+      -- Sanitize malformed JSON output
       local sanitized = sanitize_json(stdout)
       local ok, res = pcall(vim.fn.json_decode, sanitized)
+      if not ok or type(res) ~= "table" then
+        -- Try again with stripped control characters
+        local alt = sanitized:gsub("[\x00-\x1F]", "")
+        ok, res = pcall(vim.fn.json_decode, alt)
+      end
       if not ok or type(res) ~= "table" then
         vim.schedule(function()
           vim.notify("Archie: invalid JSON response:\n" .. sanitized, vim.log.levels.ERROR)
@@ -145,7 +164,7 @@ local function request_completion()
         return
       end
 
-      -- Extract text from any supported format
+      -- Extract text from model response
       local text = res.content
         or res.text
         or (res.choices and res.choices[1]
