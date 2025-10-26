@@ -149,12 +149,13 @@ local function request_completion()
         return
       end
 
+
       -- Sanitize malformed JSON output
       local sanitized = sanitize_json(stdout)
       local ok, res = pcall(vim.fn.json_decode, sanitized)
       if not ok or type(res) ~= "table" then
-        -- Try again with stripped control characters
-        local alt = sanitized:gsub("[\x00-\x1F]", "")
+        -- Try again with stripped control characters (fix: valid Lua pattern)
+        local alt = sanitized:gsub("[%z\1-\31]", "")
         ok, res = pcall(vim.fn.json_decode, alt)
       end
       if not ok or type(res) ~= "table" then
@@ -166,12 +167,12 @@ local function request_completion()
 
       -- Extract text from model response
       local text = res.content
-        or res.text
-        or (res.choices and res.choices[1]
-          and (res.choices[1].text
-            or (res.choices[1].message and res.choices[1].message.content)
-            or res.choices[1].content))
-        or res.response
+      or res.text
+      or (res.choices and res.choices[1]
+      and (res.choices[1].text
+      or (res.choices[1].message and res.choices[1].message.content)
+      or res.choices[1].content))
+      or res.response
 
       if not text or text == "" then
         return
@@ -238,7 +239,7 @@ function M.accept_ghost()
   local buf = vim.api.nvim_get_current_buf()
   local line = vim.api.nvim_win_get_cursor(0)[1] - 1
   local extmarks =
-      vim.api.nvim_buf_get_extmarks(buf, ghost_ns, { line, 0 }, { line, -1 }, { details = true })
+  vim.api.nvim_buf_get_extmarks(buf, ghost_ns, { line, 0 }, { line, -1 }, { details = true })
   if #extmarks == 0 then
     return
   end
