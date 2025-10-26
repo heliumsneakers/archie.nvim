@@ -14,6 +14,10 @@ function M.setup(opts)
   end
 end
 
+function M.is_enabled()
+  return ghost_enabled
+end
+
 -- global state
 local ghost_ns = vim.api.nvim_create_namespace("archie_ghost")
 local ghost_enabled = false
