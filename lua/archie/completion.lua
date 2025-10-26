@@ -54,45 +54,6 @@ local function show_ghost(text)
   })
 end
 
----------------------------------------------------------------------
--- STRONG JSON SANITIZER
----------------------------------------------------------------------
-local function sanitize_json(raw)
-  if not raw or raw == "" then
-    return "{}"
-  end
-
-  -- Keep only the last full JSON block
-  local last_obj = raw:match("(%b{})%s*$")
-  if last_obj then
-    raw = last_obj
-  end
-
-  -- Normalize CRLF → LF
-  raw = raw:gsub("\r\n", "\n")
-
-  -- Escape literal newlines inside quoted strings
-  local fixed = {}
-  local in_string = false
-  for c in raw:gmatch(".") do
-    if c == '"' then
-      table.insert(fixed, c)
-      in_string = not in_string
-    elseif in_string and c == "\n" then
-      table.insert(fixed, "\\n")
-    else
-      table.insert(fixed, c)
-    end
-  end
-  raw = table.concat(fixed)
-
-  -- Ensure closing brace
-  if not raw:match("}%s*$") then
-    raw = raw .. "}"
-  end
-
-  return raw
-end
 
 ---------------------------------------------------------------------
 -- MODEL REQUEST
@@ -150,22 +111,28 @@ local function request_completion()
       end
 
 
+
       -- Sanitize malformed JSON output
-      local sanitized = sanitize_json(stdout)
+      local sanitized = stdout:gsub("\r", "")
+
+      -- Try to capture "content" text manually if full JSON decode fails
       local ok, res = pcall(vim.fn.json_decode, sanitized)
       if not ok or type(res) ~= "table" then
-        -- Try again with stripped control characters (fix: valid Lua pattern)
-        local alt = sanitized:gsub("[%z\1-\31]", "")
-        ok, res = pcall(vim.fn.json_decode, alt)
-      end
-      if not ok or type(res) ~= "table" then
+        local match = sanitized:match('"content"%s*:%s*"(.-)"')
+        if match then
+          local text = match:gsub("\\n", "\n"):gsub('\\"', '"')
+          vim.schedule(function()
+            show_ghost(text)
+          end)
+          return
+        end
         vim.schedule(function()
           vim.notify("Archie: invalid JSON response:\n" .. sanitized, vim.log.levels.ERROR)
         end)
         return
       end
 
-      -- Extract text from model response
+      -- If valid JSON parsed fine, extract normally
       local text = res.content
       or res.text
       or (res.choices and res.choices[1]
