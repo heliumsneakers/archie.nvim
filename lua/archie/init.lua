@@ -1,4 +1,3 @@
--- lua/archie/init.lua
 local M = {}
 
 local menu_win, menu_buf

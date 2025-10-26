@@ -4,7 +4,9 @@ local Job = require("plenary.job")
 M.endpoint = "http://127.0.0.1:8080/completion"
 
 function M.setup(opts)
-  if opts.endpoint then M.endpoint = opts.endpoint end
+  if opts.endpoint then
+    M.endpoint = opts.endpoint
+  end
 end
 
 function M.query_async(prompt, callback)
@@ -24,10 +26,11 @@ function M.query_async(prompt, callback)
     on_exit = function(j, code)
       if code ~= 0 then
         vim.schedule(function()
-          vim.notify("Qwen API error", vim.log.levels.ERROR)
+          vim.notify("Archie API error", vim.log.levels.ERROR)
         end)
         return
       end
+
       local output = table.concat(j:result(), "\n")
       local ok, data = pcall(vim.fn.json_decode, output)
       if ok and data then
@@ -38,4 +41,3 @@ function M.query_async(prompt, callback)
 end
 
 return M
-
