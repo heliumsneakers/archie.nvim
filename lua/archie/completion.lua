@@ -4,13 +4,21 @@ local Job = require("plenary.job")
 
 local M = {}
 
+-- global state
+local ghost_ns = vim.api.nvim_create_namespace("archie_ghost")
+local ghost_enabled = true
+local current_job = nil
+local pending_text = nil -- store ghost text until user confirms
+
+vim.api.nvim_set_hl(0, "ArchieGhostText", { fg = "#666666", italic = true })
+
+---------------------------------------------------------------------
+-- Setup & State
+---------------------------------------------------------------------
 function M.setup(opts)
   opts = opts or {}
-  if opts.autocomplete_delay then
-    debounce_delay = opts.autocomplete_delay
-  end
-  if opts.enable_autocomplete then
-    ghost_enabled = true
+  if opts.enable_autocomplete ~= nil then
+    ghost_enabled = opts.enable_autocomplete
   end
 end
 
@@ -18,20 +26,12 @@ function M.is_enabled()
   return ghost_enabled
 end
 
--- global state
-local ghost_ns = vim.api.nvim_create_namespace("archie_ghost")
-local ghost_enabled = false
-local debounce_timer = nil
-local debounce_delay = 250
-local current_job = nil
-
-vim.api.nvim_set_hl(0, "ArchieGhostText", { fg = "#666666", italic = true })
-
 ---------------------------------------------------------------------
 -- Helpers
 ---------------------------------------------------------------------
 local function clear_ghost()
   vim.api.nvim_buf_clear_namespace(0, ghost_ns, 0, -1)
+  pending_text = nil
 end
 
 local function show_ghost(text)
@@ -41,6 +41,7 @@ local function show_ghost(text)
   text = text:gsub("^%s+", "")
   local preview = text:match("^[^\n]+") or text
   clear_ghost()
+  pending_text = preview
   vim.api.nvim_buf_set_extmark(buf, ghost_ns, line, -1, {
     virt_text = { { preview, "ArchieGhostText" } },
     virt_text_pos = "inline",
@@ -53,27 +54,23 @@ end
 ---------------------------------------------------------------------
 local function safe_json_decode(raw)
   if not raw or raw == "" then return nil end
-  -- try normal JSON
   local ok, decoded = pcall(vim.fn.json_decode, raw)
   if ok and type(decoded) == "table" then return decoded end
 
-  -- cleanup: remove control chars, normalize line endings
   local clean = raw:gsub("[%z\1-\31]", ""):gsub("\r", "")
   ok, decoded = pcall(vim.fn.json_decode, clean)
   if ok and type(decoded) == "table" then return decoded end
 
-  -- fallback: try to manually extract "content" or "text"
   local content = clean:match('"content"%s*:%s*"(.-)"')
     or clean:match('"text"%s*:%s*"(.-)"')
   if content then
     return { content = content:gsub("\\n", "\n"):gsub('\\"', '"') }
   end
-
   return nil
 end
 
 ---------------------------------------------------------------------
--- Request completion
+-- Request completion (manual trigger)
 ---------------------------------------------------------------------
 local function request_completion()
   if not ghost_enabled then return end
@@ -82,7 +79,6 @@ local function request_completion()
 
   local prompt = table.concat(ctx.code, "\n") .. "\n# Continue code:\n"
 
-  -- cancel previous job
   if current_job and not current_job.is_shutdown then
     pcall(current_job.shutdown, current_job)
   end
@@ -101,7 +97,6 @@ local function request_completion()
       }),
       api.endpoint,
     },
-
     on_exit = function(j, code)
       local stdout = table.concat(j:result(), "\n")
       local stderr = table.concat(j:stderr_result(), "\n")
@@ -138,60 +133,31 @@ local function request_completion()
 end
 
 ---------------------------------------------------------------------
--- Autocomplete hooks
----------------------------------------------------------------------
-local function debounced_suggest()
-  if debounce_timer and not debounce_timer:is_closing() then
-    debounce_timer:stop()
-    debounce_timer:close()
-  end
-  debounce_timer = vim.loop.new_timer()
-  debounce_timer:start(debounce_delay, 0, function()
-    vim.schedule(request_completion)
-  end)
-end
-
-function M.suggest()
-  if ghost_enabled then request_completion() end
-end
-
-function M.toggle_ghost()
-  ghost_enabled = not ghost_enabled
-  if not ghost_enabled then
-    clear_ghost()
-    if debounce_timer and not debounce_timer:is_closing() then
-      debounce_timer:stop()
-      debounce_timer:close()
-    end
-    vim.notify("Archie autocomplete disabled", vim.log.levels.INFO)
-  else
-    vim.notify("Archie autocomplete enabled", vim.log.levels.INFO)
-    local group = vim.api.nvim_create_augroup("ArchieAutoComplete", { clear = true })
-    vim.api.nvim_create_autocmd("InsertCharPre", {
-      group = group,
-      callback = function() debounced_suggest() end,
-    })
-  end
-end
-
----------------------------------------------------------------------
--- Accept ghost text
+-- Confirm / Accept ghost text
 ---------------------------------------------------------------------
 function M.accept_ghost()
+  if not pending_text or pending_text == "" then return end
   local buf = vim.api.nvim_get_current_buf()
   local line = vim.api.nvim_win_get_cursor(0)[1] - 1
-  local extmarks = vim.api.nvim_buf_get_extmarks(buf, ghost_ns, { line, 0 }, { line, -1 }, { details = true })
-  if #extmarks == 0 then return end
-  local details = extmarks[1][4]
-  local text = details.virt_text and details.virt_text[1][1]
-  if not text or text == "" then return end
-  vim.api.nvim_buf_set_text(buf, line, -1, line, -1, { text })
+  vim.api.nvim_buf_set_text(buf, line, -1, line, -1, { pending_text })
   clear_ghost()
 end
 
-vim.keymap.set("i", "<Tab>", function()
-  require("archie.completion").accept_ghost()
-end, { desc = "Accept Archie ghost text" })
+---------------------------------------------------------------------
+-- Keymap: Shift-Tab
+-- First press -> query model
+-- Second press -> accept ghost
+---------------------------------------------------------------------
+vim.keymap.set("i", "<S-Tab>", function()
+  if not ghost_enabled then return end
+  if pending_text then
+    -- if ghost already visible, accept it
+    M.accept_ghost()
+  else
+    -- otherwise, trigger completion request
+    request_completion()
+  end
+end, { desc = "Archie: trigger or confirm completion" })
 
 ---------------------------------------------------------------------
 return M
