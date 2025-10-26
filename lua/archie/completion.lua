@@ -132,6 +132,16 @@ local function request_completion()
   current_job:start()
 end
 
+function M.toggle_ghost()
+  ghost_enabled = not ghost_enabled
+  if ghost_enabled then
+    vim.notify("Archie autocomplete enabled", vim.log.levels.INFO)
+  else
+    clear_ghost()
+    vim.notify("Archie autocomplete disabled", vim.log.levels.INFO)
+  end
+end
+
 ---------------------------------------------------------------------
 -- Confirm / Accept ghost text
 ---------------------------------------------------------------------

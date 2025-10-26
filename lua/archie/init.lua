@@ -58,7 +58,7 @@ function M.open_menu()
   end, { buffer = menu_buf, nowait = true })
 
   vim.keymap.set("n", "2", function()
-    require("archie.completion").toggle_ghost()
+    require("archie.completion")
     render_menu()
   end, { buffer = menu_buf, nowait = true })
 
