@@ -105,14 +105,17 @@ end
 ---------------------------------------------------------------------
 -- Triggered after typing stops for debounce_delay ms
 local function debounced_suggest()
-  if debounce_timer then
+  if debounce_timer and not debounce_timer:is_closing() then
     debounce_timer:stop()
     debounce_timer:close()
   end
 
-  debounce_timer = vim.defer_fn(function()
-    request_completion()
-  end, debounce_delay)
+  debounce_timer = vim.loop.new_timer()
+  debounce_timer:start(debounce_delay, 0, function()
+    vim.schedule(function()
+      request_completion()
+    end)
+  end)
 end
 
 -- Public API to trigger manually
