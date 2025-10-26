@@ -4,6 +4,16 @@ local Job = require("plenary.job")
 
 local M = {}
 
+function M.setup(opts)
+  opts = opts or {}
+  if opts.autocomplete_delay then
+    debounce_delay = opts.autocomplete_delay
+  end
+  if opts.enable_autocomplete then
+    ghost_enabled = true
+  end
+end
+
 -- global state
 local ghost_ns = vim.api.nvim_create_namespace("archie_ghost")
 local ghost_enabled = false
