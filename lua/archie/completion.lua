@@ -10,6 +10,7 @@ local ghost_enabled = false
 local debounce_timer = nil
 local debounce_delay = 250  -- ms delay after typing stops
 local current_job = nil
+vim.api.nvim_set_hl(0, "ArchieGhostText", { fg = "#666666", italic = true })
 
 ---------------------------------------------------------------------
 -- SETUP
@@ -42,8 +43,8 @@ local function show_ghost(text)
 
   clear_ghost()
   vim.api.nvim_buf_set_extmark(buf, ghost_ns, line, -1, {
-    virt_text = { { preview, "Comment" } },
-    virt_text_pos = "eol",
+    virt_text = { { preview, "ArchieGhostText" } },
+    virt_text_pos = "inline",  -- overlays ghost text at cursor
     hl_mode = "combine",
   })
 end
@@ -86,9 +87,10 @@ local function request_completion()
       local ok, res = pcall(vim.fn.json_decode, output)
       if not ok or not res then return end
 
-      local text = res.text
-        or (res.choices and res.choices[1]
-          and (res.choices[1].text or res.choices[1].content))
+      local text = res.content
+      or res.text
+      or (res.choices and res.choices[1]
+      and (res.choices[1].text or res.choices[1].content))
       if not text or text == "" then return end
 
       vim.schedule(function()
@@ -144,5 +146,22 @@ function M.toggle_ghost()
     })
   end
 end
+
+function M.accept_ghost()
+  local buf = vim.api.nvim_get_current_buf()
+  local line = vim.api.nvim_win_get_cursor(0)[1] - 1
+  local extmarks = vim.api.nvim_buf_get_extmarks(buf, ghost_ns, {line, 0}, {line, -1}, { details = true })
+  if #extmarks == 0 then return end
+  local details = extmarks[1][4]
+  local text = details.virt_text and details.virt_text[1][1]
+  if not text or text == "" then return end
+
+  vim.api.nvim_buf_set_text(buf, line, -1, line, -1, { text })
+  clear_ghost()
+end
+
+vim.keymap.set("i", "<Tab>", function()
+  require("archie.completion").accept_ghost()
+end, { desc = "Accept Archie ghost text" })
 
 return M
