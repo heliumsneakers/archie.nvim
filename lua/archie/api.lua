@@ -51,17 +51,18 @@ end
 local function run_codex(prompt, opts)
   opts = opts or {}
   local tmpfile = vim.fn.tempname()
-  local args = { "exec", "-m", config.model, "-o", tmpfile, "-a", "never" }
+  local args = { "exec", "-m", config.model, "-o", tmpfile }
   if opts.codex_args then
     vim.list_extend(args, opts.codex_args)
   elseif config.codex_args and #config.codex_args > 0 then
     vim.list_extend(args, config.codex_args)
   end
-  table.insert(args, prompt)
+  table.insert(args, "-")
 
   local job = Job:new({
     command = config.codex_cmd,
     args = args,
+    writer = prompt .. "\n",
     on_exit = function(j, code)
       if code ~= 0 then
         pcall(os.remove, tmpfile)
