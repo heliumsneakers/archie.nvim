@@ -74,14 +74,14 @@ local function run_codex(prompt, opts)
     args = args,
     writer = prompt .. "\n",
     on_exit = function(j, code)
+      local schedule_error = opts.on_error and vim.schedule_wrap(opts.on_error)
+      local schedule_result = opts.on_result and vim.schedule_wrap(opts.on_result)
+
       if code ~= 0 then
         if opts.on_error then
           local err = table.concat(j:stderr_result(), "\n")
           if err == "" then err = ("Codex exited with %d"):format(code) end
-          local handler = opts.on_error
-          vim.schedule(function()
-            handler(err)
-          end)
+          schedule_error(err)
         else
           vim.schedule(function()
             local err = table.concat(j:stderr_result(), "\n")
@@ -94,7 +94,7 @@ local function run_codex(prompt, opts)
         return
       end
 
-      if opts.on_result then
+      if schedule_result then
         local raw_events = j:result()
         local final_message = nil
 
@@ -135,9 +135,7 @@ local function run_codex(prompt, opts)
         end
 
         if final_message and final_message ~= "" then
-          vim.schedule(function()
-            opts.on_result(final_message)
-          end)
+          schedule_result(final_message)
         end
       end
     end,
