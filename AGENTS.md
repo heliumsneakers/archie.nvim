@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-Runtime code lives under `lua/archie/`. `init.lua` wires up `setup()` and menu keymaps. `api.lua` now shells out to the Codex CLI, handling prompts, temp files, and error surfacing. `completion.lua` owns ghost-text state and calls `api.request_inline_completion()`; it uses `lsp_bridge.lua` for cursor-aware context (prefix, suffix, nearby lines). `ui.lua` keeps the command palette for ad-hoc Codex queries. Keep new modules under `lua/archie/` and require them from `init.lua` so Neovim can load them via `require('archie.*')`.
+Runtime code lives under `lua/archie/`. `init.lua` wires up `setup()` and menu keymaps. `api.lua` streams JSON events from the Codex CLI, disables shell/search features, and extracts the final `agent_message` text. `completion.lua` owns ghost-text state and calls `api.request_inline_completion()`; it uses `lsp_bridge.lua` for cursor-aware context (prefix, suffix, nearby lines). `ui.lua` keeps the command palette for ad-hoc Codex queries. Keep new modules under `lua/archie/` and require them from `init.lua` so Neovim can load them via `require('archie.*')`.
 
 ## Build, Test, and Development Commands
 - `stylua lua` — format Lua sources before committing. Install `stylua` locally or via Mason.
@@ -19,4 +19,4 @@ There is no automated suite yet. Manual flow: ensure `codex login` succeeds, sta
 Follow the existing history: concise, present-tense subjects (“ui changes”, “returned toggle_ghost”). Keep changes focused; squash-on-merge is common. Pull requests should describe intent, list manual validation steps, call out Codex model assumptions (`gpt-5`, custom args), and include screenshots or recordings when UI behavior shifts. Link issues or discussions when relevant.
 
 ## Configuration Notes
-`require('archie').setup({ codex = { cmd = 'codex', model = 'gpt-5', codex_args = {...} } })` lets users override the Codex binary, model, or extra CLI args. Respect environment variables (e.g. `OPENAI_API_KEY`) and never persist tokens. Document any new CLI requirements or feature flags in README updates before merging.
+`require('archie').setup({ codex = { cmd = 'codex', model = 'gpt-5', disable_features = {...}, codex_args = {...} } })` lets users override the Codex binary, toggle Codex feature flags, or append extra CLI args. Respect environment variables (e.g. `OPENAI_API_KEY`) and never persist tokens. Document any new CLI requirements or feature flags in README updates before merging.

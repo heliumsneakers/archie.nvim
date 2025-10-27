@@ -16,8 +16,9 @@ Archie is a lightweight Neovim assistant that pipes your editing context to the 
     require("archie").setup({
       codex = {
         model = "gpt-5",
-        -- cmd = "codex",      -- override if codex lives elsewhere
-        -- args = { "--json" } -- forward extra CLI flags if needed
+        disable_features = { "shell", "web_search", "git", "mcp", "sandbox" },
+        -- cmd = "codex",              -- override if codex lives elsewhere
+        -- args = { "--disable", "ui" } -- forward extra CLI flags if needed
       },
       enable_autocomplete = true,
       autocomplete_delay = 250,
@@ -34,7 +35,8 @@ Archie is a lightweight Neovim assistant that pipes your editing context to the 
 
 ### Tips
 - Archie captures roughly ten lines of code around the cursor plus the current line prefix/suffix to ground completions. Keep an eye on overly long files; trimming whitespace or comments near the cursor often improves results.
-- You can pass additional Codex CLI flags via `codex.args` if your environment requires a proxy or specific profile.
+- The plugin disables Codex tools (shell, git, search, etc.) by default; adjust `codex.disable_features` if you need them.
+- Pass extra CLI flags through `codex.args` (e.g. proxy settings) when necessary.
 - Errors (e.g., missing login, network hiccups) surface through `vim.notify`; they won’t insert text or leave stale ghost hints.
 
 Enjoy the inline Codex experience—file issues or PRs if you hit edge cases. 

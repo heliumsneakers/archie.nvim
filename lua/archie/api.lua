@@ -5,9 +5,8 @@ local M = {}
 local defaults = {
   codex_cmd = "codex",
   model = "gpt-5",
-  temperature = 0.1,
-  max_tokens = 256,
   codex_args = {},
+  disable_features = { "shell", "sandbox", "mcp", "git", "web_search" },
 }
 
 local config = vim.deepcopy(defaults)
@@ -25,19 +24,14 @@ end
 
 local function build_inline_prompt(ctx, extra)
   local lines = {}
-  table.insert(lines, "You are Codex providing inline code completions inside Neovim.")
-  table.insert(lines, "Model: " .. config.model)
-  table.insert(lines, "Respond with only the text that should be inserted after the cursor.")
-  table.insert(lines, "Do not repeat text that already exists after the cursor and do not add explanations.")
-  table.insert(lines, "")
-  table.insert(lines, ("Filetype: %s"):format(ctx.filetype ~= "" and ctx.filetype or "plain"))
+  table.insert(lines, ("Language: %s"):format(ctx.filetype ~= "" and ctx.filetype or "plain"))
   table.insert(lines, "Cursor prefix:")
   table.insert(lines, ctx.line_prefix or "")
   table.insert(lines, "")
   table.insert(lines, "Cursor suffix:")
   table.insert(lines, ctx.line_suffix or "")
   table.insert(lines, "")
-  table.insert(lines, "Surrounding context:")
+  table.insert(lines, "Surrounding context (closest lines, newest last):")
   table.insert(lines, table.concat(ctx.code or {}, "\n"))
   if extra and extra ~= "" then
     table.insert(lines, "")
@@ -52,7 +46,7 @@ local function wrap_prompt(prompt)
   local header = {
     "You are Codex running in inline-completion mode for a Neovim plugin.",
     "Respond ONLY with the text to insert after the cursor.",
-    "Do not explain, do not run commands, do not inspect repositories.",
+    "Do not explain, do not run commands, do not inspect repositories, and do not add greetings or commentary.",
     "",
   }
   return table.concat(header, "\n") .. prompt
@@ -61,8 +55,13 @@ end
 local function run_codex(prompt, opts)
   opts = opts or {}
   prompt = wrap_prompt(prompt)
-  local tmpfile = vim.fn.tempname()
-  local args = { "exec", "-m", config.model, "-o", tmpfile }
+  local args = { "exec", "-m", config.model, "--json" }
+
+  for _, feature in ipairs(config.disable_features or {}) do
+    table.insert(args, "--disable")
+    table.insert(args, feature)
+  end
+
   if opts.codex_args then
     vim.list_extend(args, opts.codex_args)
   elseif config.codex_args and #config.codex_args > 0 then
@@ -76,7 +75,6 @@ local function run_codex(prompt, opts)
     writer = prompt .. "\n",
     on_exit = function(j, code)
       if code ~= 0 then
-        pcall(os.remove, tmpfile)
         if opts.on_error then
           local err = table.concat(j:stderr_result(), "\n")
           if err == "" then err = ("Codex exited with %d"):format(code) end
@@ -93,19 +91,34 @@ local function run_codex(prompt, opts)
         return
       end
 
-      local ok, lines = pcall(vim.fn.readfile, tmpfile)
-      if ok and opts.on_result then
-        opts.on_result(table.concat(lines, "\n"))
-      elseif not ok then
-        if opts.on_error then
-          opts.on_error("Failed to read Codex response")
-        else
-          vim.schedule(function()
-            vim.notify("Archie: failed to read Codex response file", vim.log.levels.ERROR)
-          end)
+      if opts.on_result then
+        local response = nil
+        for _, line in ipairs(j:result()) do
+          if line ~= "" then
+            local ok, event = pcall(vim.fn.json_decode, line)
+            if ok and type(event) == "table" then
+              if event.item and type(event.item) == "table" then
+                if event.item.type == "agent_message" then
+                  response = event.item.text or event.item.content or response
+                elseif event.item.type == "message" then
+                  response = event.item.text or event.item.content or response
+                end
+              elseif event.type == "agent_message" then
+                response = event.text or response
+              end
+            end
+          end
+        end
+        if (not response or response == "") then
+          local raw = table.concat(j:result(), "\n")
+          if raw ~= "" then
+            response = raw
+          end
+        end
+        if response and response ~= "" then
+          opts.on_result(response)
         end
       end
-      pcall(os.remove, tmpfile)
     end,
   })
 
@@ -120,10 +133,9 @@ function M.setup(opts)
   if type(codex_opts.codex_cmd) == "string" then config.codex_cmd = codex_opts.codex_cmd end
   if type(codex_opts.cmd) == "string" then config.codex_cmd = codex_opts.cmd end
   if type(codex_opts.model) == "string" then config.model = codex_opts.model end
-  if type(codex_opts.temperature) == "number" then config.temperature = codex_opts.temperature end
-  if type(codex_opts.max_tokens) == "number" then config.max_tokens = codex_opts.max_tokens end
   if type(codex_opts.codex_args) == "table" then config.codex_args = codex_opts.codex_args end
   if type(codex_opts.args) == "table" then config.codex_args = codex_opts.args end
+  if type(codex_opts.disable_features) == "table" then config.disable_features = codex_opts.disable_features end
 end
 
 function M.request_inline_completion(ctx, on_result, on_error)
