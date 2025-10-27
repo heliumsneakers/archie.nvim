@@ -78,7 +78,10 @@ local function run_codex(prompt, opts)
         if opts.on_error then
           local err = table.concat(j:stderr_result(), "\n")
           if err == "" then err = ("Codex exited with %d"):format(code) end
-          opts.on_error(err)
+          local handler = opts.on_error
+          vim.schedule(function()
+            handler(err)
+          end)
         else
           vim.schedule(function()
             local err = table.concat(j:stderr_result(), "\n")
@@ -92,31 +95,49 @@ local function run_codex(prompt, opts)
       end
 
       if opts.on_result then
-        local response = nil
-        for _, line in ipairs(j:result()) do
+        local raw_events = j:result()
+        local final_message = nil
+
+        for _, line in ipairs(raw_events) do
           if line ~= "" then
             local ok, event = pcall(vim.fn.json_decode, line)
             if ok and type(event) == "table" then
-              if event.item and type(event.item) == "table" then
-                if event.item.type == "agent_message" then
-                  response = event.item.text or event.item.content or response
-                elseif event.item.type == "message" then
-                  response = event.item.text or event.item.content or response
+              local etype = event.type or (event.item and event.item.type)
+              if etype == "agent_message" or etype == "message" then
+                local container = event.item or event
+                if container and type(container) == "table" then
+                  if type(container.text) == "string" then
+                    final_message = container.text
+                  elseif type(container.content) == "string" then
+                    final_message = container.content
+                  elseif type(container.message) == "table" then
+                    local msg = container.message
+                    if type(msg.content) == "table" then
+                      local aggregate = {}
+                      for _, chunk in ipairs(msg.content) do
+                        if type(chunk) == "table" and chunk.text then
+                          table.insert(aggregate, chunk.text)
+                        end
+                      end
+                      if #aggregate > 0 then
+                        final_message = table.concat(aggregate, "")
+                      end
+                    elseif type(msg.content) == "string" then
+                      final_message = msg.content
+                    end
+                  end
                 end
-              elseif event.type == "agent_message" then
-                response = event.text or response
+              elseif etype == "completion" and type(event.delta) == "string" then
+                final_message = (final_message or "") .. event.delta
               end
             end
           end
         end
-        if (not response or response == "") then
-          local raw = table.concat(j:result(), "\n")
-          if raw ~= "" then
-            response = raw
-          end
-        end
-        if response and response ~= "" then
-          opts.on_result(response)
+
+        if final_message and final_message ~= "" then
+          vim.schedule(function()
+            opts.on_result(final_message)
+          end)
         end
       end
     end,
