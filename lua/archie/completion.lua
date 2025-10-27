@@ -8,7 +8,9 @@ local M = {}
 local ghost_ns = vim.api.nvim_create_namespace("archie_ghost")
 local ghost_enabled = true
 local current_job = nil
-local pending_text = nil -- store ghost text until user confirms
+local pending_text = nil
+local debounce_timer = nil
+local debounce_delay = 300
 
 vim.api.nvim_set_hl(0, "ArchieGhostText", { fg = "#666666", italic = true })
 
@@ -17,9 +19,8 @@ vim.api.nvim_set_hl(0, "ArchieGhostText", { fg = "#666666", italic = true })
 ---------------------------------------------------------------------
 function M.setup(opts)
   opts = opts or {}
-  if opts.enable_autocomplete ~= nil then
-    ghost_enabled = opts.enable_autocomplete
-  end
+  if opts.autocomplete_delay then debounce_delay = opts.autocomplete_delay end
+  if opts.enable_autocomplete ~= nil then ghost_enabled = opts.enable_autocomplete end
 end
 
 function M.is_enabled()
@@ -70,7 +71,7 @@ local function safe_json_decode(raw)
 end
 
 ---------------------------------------------------------------------
--- Request completion (manual trigger)
+-- Request completion
 ---------------------------------------------------------------------
 local function request_completion()
   if not ghost_enabled then return end
@@ -109,12 +110,7 @@ local function request_completion()
       end
 
       local res = safe_json_decode(stdout)
-      if not res or type(res) ~= "table" then
-        vim.schedule(function()
-          vim.notify("Archie: invalid JSON (no recoverable text)", vim.log.levels.WARN)
-        end)
-        return
-      end
+      if not res or type(res) ~= "table" then return end
 
       local text = res.content
         or res.text
@@ -128,22 +124,34 @@ local function request_completion()
       vim.schedule(function() show_ghost(text) end)
     end,
   })
-
   current_job:start()
 end
 
-function M.toggle_ghost()
-  ghost_enabled = not ghost_enabled
-  if ghost_enabled then
-    vim.notify("Archie autocomplete enabled", vim.log.levels.INFO)
-  else
-    clear_ghost()
-    vim.notify("Archie autocomplete disabled", vim.log.levels.INFO)
+---------------------------------------------------------------------
+-- Auto-update suggestions while typing (debounced)
+---------------------------------------------------------------------
+local function debounced_request()
+  if debounce_timer and not debounce_timer:is_closing() then
+    debounce_timer:stop()
+    debounce_timer:close()
   end
+  debounce_timer = vim.loop.new_timer()
+  debounce_timer:start(debounce_delay, 0, function()
+    vim.schedule(request_completion)
+  end)
 end
 
+vim.api.nvim_create_autocmd("InsertCharPre", {
+  callback = function()
+    if ghost_enabled then
+      debounced_request()
+    end
+  end,
+  group = vim.api.nvim_create_augroup("ArchieAutoGhost", { clear = true }),
+})
+
 ---------------------------------------------------------------------
--- Confirm / Accept ghost text
+-- Accept ghost text
 ---------------------------------------------------------------------
 function M.accept_ghost()
   if not pending_text or pending_text == "" then return end
@@ -154,20 +162,13 @@ function M.accept_ghost()
 end
 
 ---------------------------------------------------------------------
--- Keymap: Shift-Tab
--- First press -> query model
--- Second press -> accept ghost
+-- Keymap: Shift-Tab to accept current suggestion
 ---------------------------------------------------------------------
 vim.keymap.set("i", "<S-Tab>", function()
-  if not ghost_enabled then return end
-  if pending_text then
-    -- if ghost already visible, accept it
+  if ghost_enabled then
     M.accept_ghost()
-  else
-    -- otherwise, trigger completion request
-    request_completion()
   end
-end, { desc = "Archie: trigger or confirm completion" })
+end, { desc = "Archie: accept ghost completion" })
 
 ---------------------------------------------------------------------
 return M
