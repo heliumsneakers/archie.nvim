@@ -51,26 +51,31 @@ end
 local function run_codex(prompt, opts)
   opts = opts or {}
   local tmpfile = vim.fn.tempname()
-  local args = { "exec", "-m", config.model, "-o", tmpfile }
+  local args = { "exec", "-m", config.model, "-o", tmpfile, "-a", "never" }
   if opts.codex_args then
     vim.list_extend(args, opts.codex_args)
   elseif config.codex_args and #config.codex_args > 0 then
     vim.list_extend(args, config.codex_args)
   end
-  table.insert(args, "-")
+  table.insert(args, prompt)
 
   local job = Job:new({
     command = config.codex_cmd,
     args = args,
-    writer = prompt .. "\n",
     on_exit = function(j, code)
       if code ~= 0 then
         pcall(os.remove, tmpfile)
         if opts.on_error then
-          opts.on_error(("Codex exited with %d"):format(code))
+          local err = table.concat(j:stderr_result(), "\n")
+          if err == "" then err = ("Codex exited with %d"):format(code) end
+          opts.on_error(err)
         else
           vim.schedule(function()
-            vim.notify(("Archie Codex error (exit %d)"):format(code), vim.log.levels.ERROR)
+            local err = table.concat(j:stderr_result(), "\n")
+            if err == "" then
+              err = ("Codex exited with %d"):format(code)
+            end
+            vim.notify(("Archie Codex error: %s"):format(err), vim.log.levels.ERROR)
           end)
         end
         return
