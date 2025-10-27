@@ -48,8 +48,19 @@ local function build_inline_prompt(ctx, extra)
   return table.concat(lines, "\n")
 end
 
+local function wrap_prompt(prompt)
+  local header = {
+    "You are Codex running in inline-completion mode for a Neovim plugin.",
+    "Respond ONLY with the text to insert after the cursor.",
+    "Do not explain, do not run commands, do not inspect repositories.",
+    "",
+  }
+  return table.concat(header, "\n") .. prompt
+end
+
 local function run_codex(prompt, opts)
   opts = opts or {}
+  prompt = wrap_prompt(prompt)
   local tmpfile = vim.fn.tempname()
   local args = { "exec", "-m", config.model, "-o", tmpfile }
   if opts.codex_args then
