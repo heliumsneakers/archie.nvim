@@ -134,8 +134,6 @@ function M.request_inline_completion(ctx, on_result, on_error)
       local cleaned = clean_completion(raw)
       if cleaned and on_result then
         on_result(cleaned)
-      elseif not cleaned and on_error then
-        on_error("Codex returned an empty completion")
       end
     end,
     on_error = on_error,
