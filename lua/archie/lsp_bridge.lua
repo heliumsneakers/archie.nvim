@@ -33,6 +33,61 @@ local function collect_symbols(list, acc, depth, limit)
   end
 end
 
+local function normalize_path(path)
+  if type(path) ~= "string" or path == "" then return nil end
+  return vim.loop.fs_realpath(path) or path
+end
+
+local function client_root(client)
+  if type(client) ~= "table" then return nil end
+  local cfg = client.config or {}
+  if type(cfg.root_dir) == "string" and cfg.root_dir ~= "" then return cfg.root_dir end
+  if type(client.workspace_folders) == "table" and #client.workspace_folders > 0 then
+    local folder = client.workspace_folders[1]
+    if type(folder) == "table" and type(folder.name) == "string" and folder.name ~= "" then
+      return folder.name
+    elseif type(folder) == "string" and folder ~= "" then
+      return folder
+    end
+  end
+  if type(cfg.workspace_folders) == "table" and #cfg.workspace_folders > 0 then
+    local folder = cfg.workspace_folders[1]
+    if type(folder) == "table" and type(folder.name) == "string" and folder.name ~= "" then
+      return folder.name
+    end
+  end
+  return nil
+end
+
+local function find_project_root(bufnr, filepath)
+  local file_real = normalize_path(filepath)
+  local best = nil
+  local clients = vim.lsp.get_active_clients({ bufnr = bufnr })
+  for _, client in ipairs(clients) do
+    local root = normalize_path(client_root(client))
+    if root and root ~= "" then
+      if not file_real or file_real:sub(1, #root) == root then
+        if not best or #root > #best then
+          best = root
+        end
+      end
+    end
+  end
+
+  if best then return best end
+
+  local win_cwd = normalize_path(vim.fn.getcwd(0))
+  if win_cwd then return win_cwd end
+
+  local buf_dir = filepath ~= "" and normalize_path(vim.fn.fnamemodify(filepath, ":p:h")) or nil
+  if buf_dir then return buf_dir end
+
+  local loop_cwd = normalize_path(vim.loop.cwd())
+  if loop_cwd then return loop_cwd end
+
+  return nil
+end
+
 function M.get_semantic_context()
   local bufnr = vim.api.nvim_get_current_buf()
   local cursor = vim.api.nvim_win_get_cursor(0)
@@ -64,6 +119,9 @@ function M.get_semantic_context()
   local col = cursor[2]
   ctx.line_prefix = line:sub(1, col)
   ctx.line_suffix = line:sub(col + 1)
+
+  ctx.cwd = normalize_path(vim.fn.getcwd(0)) or normalize_path(vim.loop.cwd())
+  ctx.project_root = find_project_root(bufnr, filepath)
 
   -- Optionally include symbols
   local results = vim.lsp.buf_request_sync(bufnr, "textDocument/documentSymbol", params, 200)

@@ -48,8 +48,7 @@ function M._run_query(query)
     vim.schedule(function()
       vim.api.nvim_put(vim.split(text, "\n"), "l", true, true)
     end)
-  end)
+  end, nil, { cwd = ctx.project_root or ctx.cwd })
 end
 
 return M
-

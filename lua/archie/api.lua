@@ -7,6 +7,7 @@ local defaults = {
   model = "gpt-5",
   codex_args = {},
   disable_features = { "shell", "sandbox", "mcp", "git", "web_search" },
+  cwd = nil,
 }
 
 local config = vim.deepcopy(defaults)
@@ -56,6 +57,9 @@ local function build_inline_prompt(ctx, extra)
     local path = ctx.relative_path or ctx.filepath
     table.insert(lines, ("File: %s"):format(path))
   end
+  if ctx.project_root and ctx.project_root ~= "" then
+    table.insert(lines, ("Project root: %s"):format(ctx.project_root))
+  end
   table.insert(lines, "Cursor prefix:")
   table.insert(lines, ctx.line_prefix or "")
   table.insert(lines, "")
@@ -93,6 +97,13 @@ local function run_codex(prompt, opts)
   opts = opts or {}
   prompt = wrap_prompt(prompt)
   local args = { "exec", "-m", config.model, "--json" }
+  local cwd = nil
+
+  if opts.cwd and type(opts.cwd) == "string" and opts.cwd ~= "" then
+    cwd = opts.cwd
+  elseif type(config.cwd) == "string" and config.cwd ~= "" then
+    cwd = config.cwd
+  end
 
   for _, feature in ipairs(config.disable_features or {}) do
     table.insert(args, "--disable")
@@ -160,6 +171,7 @@ local function run_codex(prompt, opts)
     args = args,
     writer = prompt .. "\n",
     stdout_buffered = false,
+    cwd = cwd,
     on_stdout = function(_, data)
       if not data then return end
       if type(data) == "table" then
@@ -237,12 +249,14 @@ function M.setup(opts)
   if type(codex_opts.codex_args) == "table" then config.codex_args = codex_opts.codex_args end
   if type(codex_opts.args) == "table" then config.codex_args = codex_opts.args end
   if type(codex_opts.disable_features) == "table" then config.disable_features = codex_opts.disable_features end
+  if type(codex_opts.cwd) == "string" then config.cwd = codex_opts.cwd end
 end
 
 function M.request_inline_completion(ctx, on_result, on_error)
   if not ctx or not ctx.code then return nil end
   local prompt = build_inline_prompt(ctx)
   return run_codex(prompt, {
+    cwd = ctx.project_root or ctx.cwd,
     on_result = function(raw)
       local cleaned = clean_completion(raw)
       if cleaned and on_result then
@@ -253,8 +267,10 @@ function M.request_inline_completion(ctx, on_result, on_error)
   })
 end
 
-function M.query_async(prompt, callback, on_error)
+function M.query_async(prompt, callback, on_error, extra_opts)
+  extra_opts = extra_opts or {}
   return run_codex(prompt, {
+    cwd = extra_opts.cwd,
     on_result = function(raw)
       if callback then
         callback({ text = trim(raw) })
