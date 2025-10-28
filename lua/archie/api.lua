@@ -15,6 +15,33 @@ local function trim(text)
   return text:gsub("^%s+", ""):gsub("%s+$", "")
 end
 
+local function extract_text_from_chunks(chunks)
+  if type(chunks) ~= "table" then return nil end
+  local pieces = {}
+  for _, chunk in ipairs(chunks) do
+    if type(chunk) == "string" and chunk ~= "" then
+      table.insert(pieces, chunk)
+    elseif type(chunk) == "table" and type(chunk.text) == "string" and chunk.text ~= "" then
+      table.insert(pieces, chunk.text)
+    end
+  end
+  if #pieces > 0 then return table.concat(pieces, "") end
+  return nil
+end
+
+local function extract_text_from_message(msg)
+  if type(msg) ~= "table" then return nil end
+  if type(msg.text) == "string" and msg.text ~= "" then return msg.text end
+  if type(msg.content) == "string" and msg.content ~= "" then return msg.content end
+  if type(msg.content) == "table" then
+    return extract_text_from_chunks(msg.content)
+  end
+  if type(msg.message) == "table" then
+    return extract_text_from_message(msg.message)
+  end
+  return nil
+end
+
 local function clean_completion(body)
   if not body or body == "" then return nil end
   body = body:gsub("```%w*\n?", ""):gsub("\n```", ""):gsub("\r", "")
@@ -25,6 +52,10 @@ end
 local function build_inline_prompt(ctx, extra)
   local lines = {}
   table.insert(lines, ("Language: %s"):format(ctx.filetype ~= "" and ctx.filetype or "plain"))
+  if ctx.relative_path or ctx.filepath then
+    local path = ctx.relative_path or ctx.filepath
+    table.insert(lines, ("File: %s"):format(path))
+  end
   table.insert(lines, "Cursor prefix:")
   table.insert(lines, ctx.line_prefix or "")
   table.insert(lines, "")
@@ -33,6 +64,13 @@ local function build_inline_prompt(ctx, extra)
   table.insert(lines, "")
   table.insert(lines, "Surrounding context (closest lines, newest last):")
   table.insert(lines, table.concat(ctx.code or {}, "\n"))
+  if type(ctx.symbol_summary) == "table" and #ctx.symbol_summary > 0 then
+    table.insert(lines, "")
+    table.insert(lines, "Document symbols:")
+    for _, sym in ipairs(ctx.symbol_summary) do
+      table.insert(lines, sym)
+    end
+  end
   if extra and extra ~= "" then
     table.insert(lines, "")
     table.insert(lines, extra)
@@ -44,9 +82,8 @@ end
 
 local function wrap_prompt(prompt)
   local header = {
-    "You are Codex running in inline-completion mode for a Neovim plugin.",
-    "Respond ONLY with the text to insert after the cursor.",
-    "Do not explain, do not run commands, do not inspect repositories, and do not add greetings or commentary.",
+    "You generate inline completions for Neovim.",
+    "Return only the text to insert after the cursor—no explanations, no fencing, no commentary.",
     "",
   }
   return table.concat(header, "\n") .. prompt
@@ -69,14 +106,84 @@ local function run_codex(prompt, opts)
   end
   table.insert(args, "-")
 
+  local state = {
+    delivered = false,
+    partial = {},
+  }
+
+  local schedule_result = opts.on_result and vim.schedule_wrap(opts.on_result)
+  local schedule_error = opts.on_error and vim.schedule_wrap(opts.on_error)
+
+  local function emit_result(text)
+    if state.delivered then return end
+    local cleaned = clean_completion(text)
+    if not cleaned or cleaned == "" then return end
+    state.delivered = true
+    if schedule_result then schedule_result(cleaned) end
+  end
+
+  local function append_partial(chunk)
+    if chunk and chunk ~= "" then table.insert(state.partial, chunk) end
+  end
+
+  local function flush_partial()
+    if #state.partial == 0 then return nil end
+    local text = table.concat(state.partial, "")
+    state.partial = {}
+    return text
+  end
+
+  local function parse_event(event)
+    if type(event) ~= "table" then return nil end
+    local etype = event.type or (event.item and event.item.type)
+    if etype == "item.completed" and type(event.item) == "table" then
+      local item = event.item
+      local item_type = item.type or item.role
+      if item_type == "agent_message" or item_type == "assistant_message" or item_type == "message" then
+        return extract_text_from_message(item)
+      end
+    elseif etype == "agent_message" or etype == "assistant_message" or etype == "message" then
+      return extract_text_from_message(event)
+    elseif etype == "completion" and type(event.delta) == "string" then
+      append_partial(event.delta)
+      if event.done then return flush_partial() end
+    elseif etype == "response.output_text.delta" and type(event.delta) == "string" then
+      append_partial(event.delta)
+    elseif etype == "response.completed" or etype == "response.stopped" then
+      return flush_partial()
+    end
+    return nil
+  end
+
   local job = Job:new({
     command = config.codex_cmd,
     args = args,
     writer = prompt .. "\n",
+    stdout_buffered = false,
+    on_stdout = function(_, data)
+      if not data then return end
+      if type(data) == "table" then
+        for _, line in ipairs(data) do
+          if line and line ~= "" then
+            local ok, event = pcall(vim.fn.json_decode, line)
+            if ok then
+              local text = parse_event(event)
+              if text then
+                emit_result(text)
+                break
+              end
+            end
+          end
+        end
+      elseif type(data) == "string" and data ~= "" then
+        local ok, event = pcall(vim.fn.json_decode, data)
+        if ok then
+          local text = parse_event(event)
+          if text then emit_result(text) end
+        end
+      end
+    end,
     on_exit = function(j, code)
-      local schedule_error = opts.on_error and vim.schedule_wrap(opts.on_error)
-      local schedule_result = opts.on_result and vim.schedule_wrap(opts.on_result)
-
       if code ~= 0 then
         if opts.on_error then
           local err = table.concat(j:stderr_result(), "\n")
@@ -94,48 +201,23 @@ local function run_codex(prompt, opts)
         return
       end
 
-      if schedule_result then
+      if schedule_result and not state.delivered then
         local raw_events = j:result()
-        local final_message = nil
-
         for _, line in ipairs(raw_events) do
           if line ~= "" then
             local ok, event = pcall(vim.fn.json_decode, line)
-            if ok and type(event) == "table" then
-              local etype = event.type or (event.item and event.item.type)
-              if etype == "agent_message" or etype == "message" then
-                local container = event.item or event
-                if container and type(container) == "table" then
-                  if type(container.text) == "string" then
-                    final_message = container.text
-                  elseif type(container.content) == "string" then
-                    final_message = container.content
-                  elseif type(container.message) == "table" then
-                    local msg = container.message
-                    if type(msg.content) == "table" then
-                      local aggregate = {}
-                      for _, chunk in ipairs(msg.content) do
-                        if type(chunk) == "table" and chunk.text then
-                          table.insert(aggregate, chunk.text)
-                        end
-                      end
-                      if #aggregate > 0 then
-                        final_message = table.concat(aggregate, "")
-                      end
-                    elseif type(msg.content) == "string" then
-                      final_message = msg.content
-                    end
-                  end
-                end
-              elseif etype == "completion" and type(event.delta) == "string" then
-                final_message = (final_message or "") .. event.delta
+            if ok then
+              local text = parse_event(event)
+              if text then
+                emit_result(text)
+                break
               end
             end
           end
         end
-
-        if final_message and final_message ~= "" then
-          schedule_result(final_message)
+        if not state.delivered then
+          local leftover = flush_partial()
+          if leftover then emit_result(leftover) end
         end
       end
     end,
