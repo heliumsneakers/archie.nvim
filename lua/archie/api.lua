@@ -122,15 +122,29 @@ local function run_codex(prompt, opts)
     partial = {},
   }
 
-  local schedule_result = opts.on_result and vim.schedule_wrap(opts.on_result)
-  local schedule_error = opts.on_error and vim.schedule_wrap(opts.on_error)
+  local result_cb = type(opts.on_result) == "function" and opts.on_result or nil
+  local error_cb = type(opts.on_error) == "function" and opts.on_error or nil
+
+  local function schedule_result(value)
+    if not result_cb then return end
+    vim.schedule(function()
+      result_cb(value)
+    end)
+  end
+
+  local function schedule_error(message)
+    if not error_cb then return end
+    vim.schedule(function()
+      error_cb(message)
+    end)
+  end
 
   local function emit_result(text)
     if state.delivered then return end
     local cleaned = clean_completion(text)
     if not cleaned or cleaned == "" then return end
     state.delivered = true
-    if schedule_result then schedule_result(cleaned) end
+    schedule_result(cleaned)
   end
 
   local function append_partial(chunk)
@@ -197,7 +211,7 @@ local function run_codex(prompt, opts)
     end,
     on_exit = function(j, code)
       if code ~= 0 then
-        if opts.on_error then
+        if error_cb then
           local err = table.concat(j:stderr_result(), "\n")
           if err == "" then err = ("Codex exited with %d"):format(code) end
           schedule_error(err)
@@ -213,7 +227,7 @@ local function run_codex(prompt, opts)
         return
       end
 
-      if schedule_result and not state.delivered then
+      if result_cb and not state.delivered then
         local raw_events = j:result()
         for _, line in ipairs(raw_events) do
           if line ~= "" then
